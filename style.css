@@ -24,3 +24,7 @@ html, body {
     font-size: 16pt;
     font-weight: bold;
 }
+
+button.submit-btn {
+    margin-top: 10px;
+}

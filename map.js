@@ -69,23 +69,15 @@ const parseQueryString = () => {
 
 const queryParams = parseQueryString();
 
-const copyToClipboard = (text) => {
-    const dummy = document.createElement("textarea");
-    document.body.appendChild(dummy);
-    dummy.value = text;
-    dummy.select();
-    document.execCommand("copy");
-    document.body.removeChild(dummy);
-};
-
 var app = new Vue({
     el: "#app",
 
     data: {
-        searchH3Id: undefined,
         gotoLatLon: undefined,
         currentH3Res: undefined,
-
+        selectedH3IDs: undefined,
+        dumpSelected: '',
+        selectedH3IDsError: '',
     },
 
     computed: {
@@ -113,8 +105,8 @@ var app = new Vue({
 
             hexLayer = L.layerGroup().addTo(map);
 
-            const zoom = map.getZoom();
-            this.currentH3Res = getH3ResForMapZoom(zoom);
+            // const zoom = map.getZoom();
+            // this.currentH3Res = getH3ResForMapZoom(zoom);
             const { _southWest: sw, _northEast: ne} = map.getBounds();
 
             const boundsPolygon =[
@@ -125,16 +117,45 @@ var app = new Vue({
                 [ sw.lat, sw.lng ],
             ];
 
-            const h3s = h3.polygonToCells(boundsPolygon, this.currentH3Res);
+            const h3rInt = Math.floor(this.currentH3Res);
+            const h3s = h3.polygonToCells(boundsPolygon, h3rInt);
+
+            const ids = (this.selectedH3IDs || "").split(",").map(item => item.trim()).filter(item => item.length > 0);
+            let selectedH3IDsIsValid = true;
+            let allH3res = undefined;
+            for (const id of ids) {
+                if (!h3.isValidCell(id)) {
+                    selectedH3IDsIsValid = false;
+                    break;
+                }
+
+                const h3res = h3.getResolution(id);
+                if (allH3res !== undefined) {
+                    if (allH3res !== h3res) {
+                        selectedH3IDsIsValid = false;
+                        break;
+                    }
+                }
+                allH3res = h3res;
+            }
+
+            const dumpedIDs = (this.dumpSelected || "").split(",").map(item => item.trim()).filter(item => item.length > 0);
+            let dumpedH3res = undefined;
+            for (const id of dumpedIDs) {
+                dumpedH3res = h3.getResolution(id);
+            }
 
             for (const h3id of h3s) {
 
                 const polygonLayer = L.layerGroup()
                     .addTo(hexLayer);
 
-                const isSelected = h3id === this.searchH3Id;
+                const isSelected = selectedH3IDsIsValid && ids.includes(h3id);
+                const isDumpSelected = dumpedIDs.includes(h3id);
 
-                const style = isSelected ? { fillColor: "orange" } : {};
+                const fillColor = isDumpSelected ? "orangered" : "orange";
+
+                const style = isSelected || isDumpSelected ? { fillColor: fillColor } : {};
 
                 const h3Bounds = h3.cellToBoundary(h3id);
                 const averageEdgeLength = this.computeAverageEdgeLengthInMeters(h3Bounds);
@@ -149,7 +170,7 @@ var app = new Vue({
                 `;
 
                 const h3Polygon = L.polygon(h3BoundsToPolygon(h3Bounds), style)
-                    .on('click', () => copyToClipboard(h3id))
+                    .on('click keydown', (e) => this.copyIDToClipboard(e, h3id))
                     .bindTooltip(tooltipText)
                     .addTo(polygonLayer);
 
@@ -165,6 +186,36 @@ var app = new Vue({
             }
         },
 
+        copyToClipboard: function(text) {
+            const dummy = document.createElement("textarea");
+            document.body.appendChild(dummy);
+            dummy.value = text;
+            dummy.select();
+            document.execCommand("copy");
+            document.body.removeChild(dummy);
+        },
+
+        copyIDToClipboard: function(e, text) {
+            this.copyToClipboard(text);
+            this.updateSelectedH3IDs(e, text);
+        },
+
+        updateSelectedH3IDs: function(e, text) {
+            if (e.originalEvent.ctrlKey) {
+                if (this.dumpSelected.length > 0) {
+                    this.dumpSelected += ',' + text;
+                } else {
+                    this.dumpSelected = text;
+                }
+            }
+            this.updateMapDisplay()
+        },
+
+        selectH3Resolution: function() {
+            const newZoom = H3_RES_TO_ZOOM_CORRESPONDENCE[this.currentH3Res];
+            map.setZoom(newZoom);
+        },
+
         gotoLocation: function() {
             const [lat, lon] = (this.gotoLatLon || "").split(",").map(Number);
             if (Number.isFinite(lat) && Number.isFinite(lon)
@@ -177,26 +228,59 @@ var app = new Vue({
             }
         },
 
-        findH3: function() {
-            if (!h3.isValidCell(this.searchH3Id)) {
+        findSelectedH3IDs: function() {
+            const ids = (this.selectedH3IDs || '').split(",").map(item => item.trim()).filter(item => item.length > 0);
+
+            if (ids.length == 0) {
+                this.selectedH3IDsError = 'Empty input.';
                 return;
             }
-            const h3Boundary = h3.cellToBoundary(this.searchH3Id);
 
+            let allH3res = undefined;
             let bounds = undefined;
+            for (const id of ids) {
+                if (!h3.isValidCell(id)) {
+                    this.selectedH3IDsError = 'Invalid cell ID: ' + id + '.';
+                    return;
+                }
 
-            for ([lat, lng] of h3Boundary) {
-                if (bounds === undefined) {
-                    bounds = new L.LatLngBounds([lat, lng], [lat, lng]);
-                } else {
-                    bounds.extend([lat, lng]);
+                let h3res = h3.getResolution(id);
+                if (allH3res !== undefined) {
+                    if (allH3res !== h3res) {
+                        this.selectedH3IDsError = 'IDs with different resolutions in input.';
+                        return;
+                    }
+                }
+                allH3res = h3res;
+                
+                const h3Boundary = h3.cellToBoundary(id);
+                for ([lat, lng] of h3Boundary) {
+                    if (bounds === undefined) {
+                        bounds = new L.LatLngBounds([lat, lng], [lat, lng]);
+                    } else {
+                        bounds.extend([lat, lng]);
+                    }
                 }
             }
 
-            map.fitBounds(bounds);
+            this.selectedH3IDsError = '';
 
-            const newZoom = H3_RES_TO_ZOOM_CORRESPONDENCE[h3.getResolution(this.searchH3Id)];
-            map.setZoom(newZoom);
+            map.fitBounds(bounds, {maxZoom: H3_RES_TO_ZOOM_CORRESPONDENCE[allH3res]});
+
+            this.currentH3Res = allH3res;
+        },
+
+        copyLinkToClipboard: function() {
+            let link = window.location.href.split('?')[0];
+            if (this.dumpSelected.length > 0) {
+                link += "?ids=" + this.dumpSelected;
+            }
+            this.copyToClipboard(link)
+        },
+
+        clearSelected: function() {
+            this.dumpSelected = '';
+            this.updateMapDisplay();
         }
     },
 
@@ -217,19 +301,25 @@ var app = new Vue({
 
             const initialLat = queryParams.lat ?? 0;
             const initialLng = queryParams.lng ?? 0;
-            const initialZoom = queryParams.zoom ?? 5;
-            map.setView([initialLat, initialLng], initialZoom);
+            const initialResolution = queryParams.resolution ?? 1;
+            map.setView([initialLat, initialLng], H3_RES_TO_ZOOM_CORRESPONDENCE[initialResolution]);
+            this.currentH3Res = Math.floor(initialResolution)
+            
             map.on("zoomend", this.updateMapDisplay);
             map.on("moveend", this.updateMapDisplay);
-
-            const { h3 } = queryParams;
-            console.log(h3)
-            if (h3) {
-                this.searchH3Id = h3;
-                window.setTimeout(() => this.findH3(), 50);
+            
+            const initialH3IDs = queryParams.ids ?? [];
+            if (initialH3IDs.length > 0) {
+                window.setTimeout(function() {
+                    this.selectedH3IDs = initialH3IDs;
+                    this.findSelectedH3IDs();
+                }.bind(this), 50);
             }
 
             this.updateMapDisplay();
+
+            const tooltipTriggerList = document.querySelectorAll('[data-bs-toggle="tooltip"]')
+            const tooltipList = [...tooltipTriggerList].map(tooltipTriggerEl => new bootstrap.Tooltip(tooltipTriggerEl))
         });
     }
 });
