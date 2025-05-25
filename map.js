@@ -1,4 +1,4 @@
-let map, hexLayer;
+let map, hexLayer, marker;
 
 const GeoUtils = {
     EARTH_RADIUS_METERS: 6371000,
@@ -78,6 +78,7 @@ var app = new Vue({
         selectedH3IDs: undefined,
         dumpSelected: '',
         selectedH3IDsError: '',
+        selectedPoint: undefined,
     },
 
     computed: {
@@ -103,7 +104,17 @@ var app = new Vue({
                 hexLayer.remove();
             }
 
+            if (marker) {
+                marker.remove();
+            }
+
             hexLayer = L.layerGroup().addTo(map);
+
+            if (this.selectedPoint) {
+                // const [lat, lng] = this.selectedPoint.split(",").map(Number);
+                marker = L.marker([this.selectedPoint.lat, this.selectedPoint.lng]).addTo(map);
+            }
+
 
             // const zoom = map.getZoom();
             // this.currentH3Res = getH3ResForMapZoom(zoom);
@@ -196,7 +207,8 @@ var app = new Vue({
         },
 
         copyIDToClipboard: function(e, text) {
-            this.copyToClipboard(text);
+            this.copyToClipboard(text + "," + e.latlng.toString());
+            this.selectedPoint = e.latlng;
             this.updateSelectedH3IDs(e, text);
         },
 
@@ -217,9 +229,10 @@ var app = new Vue({
         },
 
         gotoLocation: function() {
-            const [lat, lon] = (this.gotoLatLon || "").split(",").map(Number);
+            const [lat, lon] = (this.gotoLatLon || "").split(",").map(Number); 
             if (Number.isFinite(lat) && Number.isFinite(lon)
                 && lat <= 90 && lat >= -90 && lon <= 180 && lon >= -180) {
+                this.selectedPoint = L.latLng([lat, lon]);
                 map.setView(
                     [lat, lon],
                     undefined, // don't change zoom level
